@@ -1,4 +1,4 @@
-# SRV_CONFIG
+# KRO's config Generator
 Command-line tool designed to generate arbitrary configuration files for
 anything. Currently trying to figure out how I want to set up the database and
 drivers.
