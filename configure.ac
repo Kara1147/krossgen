@@ -1,5 +1,5 @@
 AC_PREREQ([2.71])
-AC_INIT([srvcfg], [0.1], [bugs@kara-online.net])
+AC_INIT([kcg], [0.1], [bugs@kara-online.net])
 
 #build host
 AC_CANONICAL_HOST

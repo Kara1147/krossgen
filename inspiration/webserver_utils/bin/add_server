@@ -1,0 +1,338 @@
+#!/bin/bash
+
+EXECNAME="add_server"
+
+WS_ROOT_DIR="/root/.local/webserver_utils"
+WS_ETC_DIR="$WS_ROOT_DIR/etc/webserver_utils"
+
+. "$WS_ETC_DIR/include/functions.sh"
+. "$WS_ETC_DIR/webserver.conf"
+
+DOMAIN=
+LOGIN=
+HOME_DIR=
+SKEL_DIR='/var/www/skel_static' # default
+BASE_DIR='/var/www' # default
+BLOCKS='10485760' # default: 10G quota
+PHP_VERSION='7.4' # default: php7.4 unit
+PHP_POOL_CONF=
+PHP_POOL_SOCK=
+NGINX_CONF=
+NO_CREATE_DATABASE= # default: create database
+RELOAD_NGINX= # default: don't reload nginx on success
+
+usage() {
+	cat <<USAGE
+Usage: add_server [options] DOMAIN LOGIN
+
+Options:
+  -h, --help                show this help
+  -k, --skel=SKEL_DIR       use this alternative skeleton directory
+  -b, --base-dir BASE_DIR   base directory for the home directory of the
+                            new account
+  -q, --quota=BLOCKS        specify the quota in 1K blocks for the virtual
+			    server user. defaults to '10485760' (10GB)
+  -p, --php=PHP_VERSION     specify a php version to use for the virtual
+			    server. defaults to '7.4'
+  -y, --yes, --assume-yes   assume "yes" or "y" at all prompts
+  --no_create_database      don't create a database for the virtual server
+  --reload_nginx            reload the NGINX webserver on successful virtual
+			    server creation
+USAGE
+}
+
+parse_args() {
+	argc=$1
+	argv=$2
+	SHORTOPTS=":hk:b:q:y"
+	LONGOPTS=(
+		"help:$no_argument::h"
+		"skel:$required_argument::k"
+		"base-dir:$required_argument::b"
+		"quota:$required_argument::q"
+		"php:$required_argument::p"
+		"yes:$no_argument:yesno_yes:true"
+		"assume-yes:$no_argument:yesno_yes:true"
+		"no-create-database:$no_argument:NO_CREATE_DATABASE:true"
+		"reload-nginx:$no_argument:RELOAD_NGINX:true"
+	)
+
+	while [ $optind -lt $argc ]; do
+		while true; do
+			getopt_long $argc $argv $SHORTOPTS $LONGOPTS
+			case $optret in
+				k)  SKEL_DIR=$optarg;;
+				b)  BASE_DIR=$optarg;;
+				q)  BLOCKS=$optarg;;
+				p)  PHP_VERSION=$optarg;;
+				y)  yesno_yes="true";;
+				h)  usage; exit 0;;
+				:)  >&2 echo "$EXECNAME: option '$optopt' requires an argument"; usage; return 1;;
+				\?)  >&2 echo "$EXECNAME: unrecognized option: '$optopt'"; usage; return 1;;
+				-1)  break;;
+				*)  ;;
+			esac
+		done
+
+		# positional arguments here
+		if [ -z "$DOMAIN" ]; then
+			[ $optind -gt $argc ] && usage && return 1
+			DOMAIN="${argv[$optind]}"
+			((optind++))
+		elif [ -z "$LOGIN" ]; then
+			[ $optind -gt $argc ] && usage && return 1
+			LOGIN="${argv[$optind]}"
+			((optind++))
+		elif [ $optind -lt $argc ]; then
+			# if we got all the available options and the positional arguments are filled, we wind up here.
+			usage
+			return 1
+		fi
+	done
+
+	# required args
+	[ -z "$DOMAIN" ] && usage && return 1
+	[ -z "$LOGIN" ] && usage && return 1
+
+	# translate args to formats im expecting
+	[ -z "$NO_CREATE_DATABASE" ] && NO_CREATE_DATABASE=false || NO_CREATE_DATABASE=true
+	[ -z "$RELOAD_NGINX" ] && RELOAD_NGINX=false || RELOAD_NGINX=true
+	[ -z "$yesno_yes" ] && yesno_yes=false || yesno_yes=true
+
+	return 0
+}
+
+validate() {
+	# DOMAIN
+	if ! [[ $DOMAIN =~ ^([[:alnum:]]([[:alnum:]-]{0,61}[[:alnum:]])?\.)+[[:alpha:]]{2,6}$ ]]; then
+		>&2 echo "$EXECNAME: '$DOMAIN' is not a valid domain"
+		return 1
+	fi
+	
+	# LOGIN
+	if ! [[ $LOGIN =~ ^[a-z][a-z0-9-]{0,30}$ ]]; then
+		>&2 echo "$EXECNAME: '$LOGIN' is not a valid username"
+		return 1
+	fi
+	if grep -qe "^$LOGIN:" "$WS_PASSWD_FILE"; then
+		>&2 echo "$EXECNAME: user '$LOGIN' already exists"
+		return 1
+	fi
+
+	# USERADD STUFF
+	SKEL_DIR=$(echo "$SKEL_DIR"|sed 's/\/\+/\//g;s/\/$//')
+	if ! checkfile $SKEL_DIR d a w ; then
+		usage
+		return 1
+	fi
+	BASE_DIR=$(echo "$BASE_DIR"|sed 's/\/\+/\//g;s/\/$//')
+	if ! checkfile $BASE_DIR d a w ; then
+		usage
+		return 1
+	fi
+	HOME_DIR=$BASE_DIR/$DOMAIN
+	
+	# QUOTA BLOCKS
+	if ! [[ $BLOCKS =~ ^[[:digit:]]+$  ]]; then
+		>&2 echo "$EXECNAME: '$BLOCKS' is not a valid number of blocks"
+		return 1
+	fi
+	if [ $BLOCKS -lt 512 ]; then
+		>&2 echo "$EXECNAME: '$BLOCKS' is not a valid number of blocks. minimum 512"
+		return 1
+	fi
+
+	# PHP CONFIG STUFF
+	PHP_POOL_DIR="$WS_PHP_ETC_DIR/$PHP_VERSION/fpm/pool.d"
+	if ! checkfile $PHP_POOL_DIR d w ; then
+		usage
+		return 1
+	fi
+	PHP_CONF_TEMPLATE=$WS_TEMPLATE_DIR/php$PHP_VERSION-pool.conf
+	if ! checkfile $PHP_CONF_TEMPLATE f r ; then
+		usage
+		return 1
+	fi
+	PHP_POOL_CONF=$PHP_POOL_DIR/$DOMAIN.conf
+	PHP_POOL_SOCK=$WS_PHP_SOCK_DIR/php$PHP_VERSION-fpm-$LOGIN.sock
+	# TODO: add php version validation ( check for unit file templates )
+
+	# NGINX CONFIG STUFF
+	NGINX_CONF_TEMPLATE=$WS_TEMPLATE_DIR/nginx.conf
+	if ! checkfile $NGINX_CONF_TEMPLATE f r ; then
+		usage
+		return 1
+	fi
+	NGINX_CONF=$WS_NGINX_CONF_DIR/$DOMAIN.conf
+}
+
+main() {
+	# TODO: all this other stuff
+
+	echo "$EXECNAME: setting up user..."
+
+	# create new user
+	echo "$EXECNAME: # useradd -b $BASE_DIR -d $HOME_DIR  -s /bin/bash -k $SKEL_DIR -m $LOGIN"
+	#useradd -b $BASE_DIR -d $HOME_DIR -s /bin/bash -k $SKEL_DIR -m $LOGIN
+
+	# fix home permissions
+	echo "$EXECNAME: # chmod -R o= $HOME_DIR"
+	#chmod -R o= $HOME_DIR
+
+	# set up quotas
+	#echo "# quota -p web23 $LOGIN" # do this manually or something, don't copy
+	#quota -p web23 $LOGIN
+
+	echo "$EXECNAME: creating database..."
+	DB_PASSWD=$(cat /dev/urandom | tr -cd '[[:graph:]]' | head -c 30 )
+	DB_PASSWD_MYSQL=$(echo "$DB_PASSWD" | sed "s/\\\\/\\\\\\\\/g;s/'/''/g")
+
+	# create database (store credentials in home)
+	echo "$EXECNAME: # mysql -e \"CREATE USER '$LOGIN'@'localhost' IDENTIFIED BY '$DB_PASSWD_MYSQL';\""
+	#if ! mysql -e "CREATE USER '$LOGIN'@'localhost' IDENTIFIED BY '$DB_PASSWD_MYSQL';" ; then
+	#	>&2 echo "Error creating database user"
+	#	return 1
+	#fi
+	echo "$EXECNAME: # mysql -e \"CREATE DATABASE $LOGIN;\""
+	#mysql -e "CREATE DATABASE $LOGIN;"
+	echo "$EXECNAME: # mysql -e \"GRANT ALL ON $LOGIN.* TO '$LOGIN'@'localhost';\""
+	#mysql -e "GRANT ALL ON $LOGIN.* TO '$LOGIN'@'localhost';"
+
+	#cat > $HOME_DIR/database_login.txt <<MYSQLDOC
+	cat > database_login.txt <<MYSQLDOC
+# generated by $EXECNAME #
+Username: $LOGIN
+Password: $DB_PASSWD
+MYSQLDOC
+
+	echo "$EXECNAME: setting up virtual server..."
+	# add http user to new user group
+	echo "$EXECNAME: # usermod -aG $LOGIN www-data"
+	#usermod -aG $LOGIN www-data
+
+	export DOMAIN HOME_DIR LOGIN PHP_POOL_CONF PHP_POOL_SOCK
+
+	# create php pool config (with replacement patterns)
+	# for testing:
+	sh -c "echo \"$(cat "$PHP_CONF_TEMPLATE")\"" > php-pool-$DOMAIN.conf
+	#sh -c "echo $(cat $PHP_CONF_TEMPLATE)" > $PHP_POOL_CONF
+
+	# create nginx config (with replacement patterns)
+	# for testing:
+	sh -c "echo \"$(cat "$NGINX_CONF_TEMPLATE")\"" > nginx-$DOMAIN.conf
+	#sh -c "echo $(cat $NGINX_CONF_TEMPLATE)" > $NGINX_CONF
+
+	echo "$EXECNAME: registering cron jobs..."
+	# set up cron jobs (backups, monitoring, &c.)
+
+	# create other configs (awstats probably)
+
+	# store record of all units & config files (for the delete server command)
+
+	# OPTIONAL:
+
+	# startup php unit
+	# link nginx config
+	if [ ! -z $RELOAD_NGINX ]; then
+		echo "$EXECNAME: reloading NGINX..."
+		# test & reload nginx
+		# if there's a problem, fail without reload, leave everything the way it is.
+	fi
+
+	return 0
+}
+
+# niam -> reverse main
+niam() {
+	[ -z $1 ] && jump=0
+	[ -n $1 ] && jump=$1
+
+	case $jump in
+		0)	# stop php unit
+			echo "$EXECNAME: stopping php unit..."
+			;&
+		10)	# remove other configs (awstats probably)
+			echo "$EXECNAME: removing configs..."
+			;&
+		20)	# remove php pool config
+			echo "$EXECNAME: removing php configuration..."
+			;&
+		30)	# remove nginx config
+			echo "$EXECNAME: removing virtual server configuration..."
+			;&
+		40)	# remove cron jobs (backups, monitoring, &c.)
+			echo "$EXECNAME: removing cron jobs..."
+			;&
+		50)	# remove database user
+			echo "$EXECNAME: removing database user..."
+			echo "$EXECNAME: # mysql -e \"DROP USER '$LOGIN'@'localhost';\""
+			# mysql -e "DROP USER '$LOGIN'@'localhost';"
+			;&
+		60)	# remove database
+			echo "$EXECNAME: removing database..."
+			echo "$EXECNAME: # mysql -e \"DELETE DATABASE $LOGIN;\""
+			#mysql -e "DELETE DATABASE $LOGIN;"
+			;&
+		70)	# remove user
+			echo "$EXECNAME: removing user..."
+			#echo "# useradd -b $BASE_DIR -d $HOME_DIR  -s /bin/bash -k $SKEL_DIR -m $LOGIN"
+			;;
+	esac
+
+	return 1
+}
+
+# MUST RUN THIS AS ROOT!
+if [ $(/usr/bin/id -u) -ne 0 ] ; then
+	echo "Please run this script as root"
+	exit 1
+fi
+
+argc=$#
+argv=( "$@" )
+
+parse_args $argc $argv || exit 2
+validate || exit 1
+
+HOME_DIR="$BASE_DIR/$DOMAIN"
+
+cat <<EOF
+debug:
+
+WS_ROOT_DIR = $WS_ROOT_DIR
+WS_ETC_DIR = $WS_ROOT_DIR
+
+WS_PASSWD_FILE = $WS_PASSWD_FILE
+WS_PHP_ETC_DIR = $WS_PHP_ETC_DIR
+WS_PHP_SOCK_DIR = $WS_PHP_SOCK_DIR
+WS_NGINX_ETC_DIR = $WS_NGINX_ETC_DIR
+WS_NGINX_CONF_DIR = $WS_NGINX_CONF_DIR
+WS_TEMPLATE_DIR = $WS_TEMPLATE_DIR
+
+EOF
+
+cat <<EOF
+DOMAIN = $DOMAIN
+LOGIN = $LOGIN
+HOME_DIR = $HOME_DIR
+SKEL_DIR = $SKEL_DIR (default is '/var/www/skel_static')
+BASE_DIR = $BASE_DIR (default is '/var/www')
+BLOCKS = $BLOCKS (default is '10485760')
+PHP_VERSION = $PHP_VERSION (default is '7.4')
+PHP_POOL_CONF = $PHP_POOL_CONF
+PHP_POOL_SOCK = $PHP_POOL_SOCK
+NGINX_CONF = $NGINX_CONF
+NO_CREATE_DATABASE = $NO_CREATE_DATABASE
+RELOAD_NGINX = $RELOAD_NGINX
+yesno_yes = $yesno_yes
+PHP_CONF_TEMPLATE = $PHP_CONF_TEMPLATE
+NGINX_CONF_TEMPLATE = $NGINX_CONF_TEMPLATE
+
+Please review the options above.
+EOF
+
+yesno "Do you wish to continue?" "N" "" || exit 0
+
+main || exit 1
+
+exit 0
