@@ -18,6 +18,7 @@ getopt() {
 	argc=$1
 	argv=$2
 	shortopts=$3
+	optret="0"
 
 	[ ${shortopts:0:1} == ":" ] && opterror=":" || opterror="?"
 
@@ -77,15 +78,13 @@ getopt() {
 	elif [ ${#optmatch} -eq 3 ]; then
 		compound_argument=
 		if [ -z $optarg ]; then
-			if [ $optind -gt $argc ]; then
-				optret="-1"
-				return 1
-			fi
-			optarg=${argv[$optind]}
-			if [ ${optarg:0:1} == "-" ]; then
-				optarg=
-			else
-				((optind++))
+			if [ $optind -lt $argc ]; then
+				optarg=${argv[$optind]}
+				if [ "${optarg:0:1}" == "-" ]; then
+					optarg=
+				else
+					((optind++))
+				fi
 			fi
 		fi
 	else
@@ -102,6 +101,7 @@ getopt_long() {
 	argv=$2
 	shortopts=$3
 	longopts=$4
+	optret="0"
 
 	[ ${shortopts:0:1} == ":" ] && opterror=":" || opterror="?"
 
@@ -156,15 +156,13 @@ getopt_long() {
 					;;
 				$optional_argument)
 					if [ -z $optarg ]; then
-						if [ $optind -ge $argc ]; then
-							optret="-1"
-							return 1
-						fi
-						optarg=${argv[$optind]}
-						if [ ${optarg:0:1} == "-" ]; then
-							optarg=
-						else
-							((optind++))
+						if [ $optind -lt $argc ]; then
+							optarg=${argv[$optind]}
+							if [ ${optarg:0:1} == "-" ]; then
+								optarg=
+							else
+								((optind++))
+							fi
 						fi
 					fi
 					;;
