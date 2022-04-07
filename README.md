@@ -1,4 +1,4 @@
-# KRO's (configuration) Generator
+# Kara's Generalized Library for Structured File Formats [krossgen](https://github.com/Kara1147/krossgen)
 C Library for reading and writing of configuration files into a friendly
 application-side interface.
 

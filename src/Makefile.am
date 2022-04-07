@@ -1,4 +1,3 @@
-bin_PROGRAMS = $(top_builddir)/bin/srvcfg
-__top_builddir__bin_srvcfg_SOURCES = srvcfg.c
-__top_builddir__bin_srvcfg_LDFLAGS = -static-libgcc -static
-__top_builddir__bin_srvcfg_LDADD =
+noinst_LIBRARIES = $(top_builddir)/bin/libkrossgen.a
+__top_builddir__bin_libkrossgen_a_SOURCES = krossgen.c
+include_HEADERS = krossgen.h
