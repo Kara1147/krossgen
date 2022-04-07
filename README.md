@@ -1,4 +1,6 @@
-# Kara's Generalized Library for Structured File Formats [krossgen](https://github.com/Kara1147/krossgen)
+[krossgen](https://github.com/Kara1147/krossgen)
+
+# Generalized Library for Structured File Formats
 C Library for reading and writing of configuration files into a friendly
 application-side interface.
 
