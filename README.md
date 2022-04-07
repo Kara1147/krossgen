@@ -1,7 +1,6 @@
-# KRO's config Generator
-Command-line tool designed to generate arbitrary configuration files for
-anything. Currently trying to figure out how I want to set up the database and
-drivers.
+# KRO's (configuration) Generator
+C Library for reading and writing of configuration files into a friendly
+application-side interface.
 
 ## Library requirements
 *none*
